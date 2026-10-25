@@ -9,11 +9,11 @@ jobs:
         with:
           node-version: 20
       - name: Install dependencies
-        run: npm install
-      - name: Add Android Platform
-        run: npx cap add android
-      - name: Sync Capacitor
-        run: npx cap sync android
+        run: npm install @capacitor/core @capacitor/android @capacitor/cli
+      - name: Init Capacitor
+        run: |
+          npx cap init "Adhan" "com.khalid.adhan" --web-dir .
+          npx cap add android
       - name: Build APK
         run: cd android && chmod +x gradlew && ./gradlew assembleDebug
       - name: Upload APK
