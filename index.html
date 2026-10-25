@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>تطبيق الأذان</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Arial', sans-serif; }
+  body {
+    background: linear-gradient(135deg, #0f2027, #203a43, #2c5364);
+    min-height: 100vh;
+    color: #fff;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 20px;
+  }
+  h1 { margin: 20px 0; font-size: 28px; text-shadow: 0 0 10px #00d4ff; }
+  .card {
+    background: rgba(255,255,255,0.1);
+    backdrop-filter: blur(10px);
+    border-radius: 20px;
+    padding: 20px;
+    width: 100%;
+    max-width: 400px;
+    margin-bottom: 15px;
+    border: 1px solid rgba(255,255,255,0.2);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+  }
+  .city-info { text-align: center; font-size: 18px; margin-bottom: 10px; color: #00d4ff; }
+  .clock { text-align: center; font-size: 36px; font-weight: bold; margin: 15px 0; color: #fff; }
+  .date { text-align: center; font-size: 14px; color: #aaa; }
+  .prayer {
+    display: flex;
+    justify-content: space-between;
+    padding: 12px 15px;
+    margin: 8px 0;
+    background: rgba(255,255,255,0.05);
+    border-radius: 12px;
+    border-right: 4px solid #00d4ff;
+  }
+  .prayer.next { background: rgba(0,212,255,0.2); border-right-color: #ffd700; }
+  .prayer-name { font-weight: bold; }
+  .prayer-time { color: #00d4ff; font-weight: bold; }
+  button {
+    width: 100%;
+    padding: 15px;
+    margin: 8px 0;
+    border: none;
+    border-radius: 12px;
+    background: linear-gradient(135deg, #00d4ff, #0099cc);
+    color: #fff;
+    font-size: 16px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: 0.3s;
+  }
+  button:hover { transform: scale(1.02); box-shadow: 0 0 20px #00d4ff; }
+  button.stop { background: linear-gradient(135deg, #ff4757, #cc0000); }
+  .status { text-align: center; font-size: 14px; margin-top: 10px; color: #ffd700; }
+  .next-info { text-align: center; margin: 10px 0; font-size: 16px; }
+</style>
+</head>
+<body>
+
+<h1>🕌 تطبيق الأذان</h1>
+
+<div class="card">
+  <div class="city-info" id="city">جاري تحديد الموقع...</div>
+  <div class="clock" id="clock">--:--:--</div>
+  <div class="date" id="date"></div>
+</div>
+
+<div class="card">
+  <div class="next-info" id="nextInfo">جاري حساب مواقيت الصلاة...</div>
+  <div id="prayers"></div>
+</div>
+
+<div class="card">
+  <button onclick="playAdhan()">🔊 تشغيل الأذان</button>
+  <button class="stop" onclick="stopAdhan()">⏹️ إيقاف</button>
+  <button onclick="enableNotifications()">🔔 تفعيل الإشعارات</button>
+  <div class="status" id="status"></div>
+</div>
+
+<audio id="adhanAudio" preload="auto"></audio>
+
+<script>
+// ============ إعدادات ============
+const PRAYER_NAMES = {
+  Fajr: "الفجر",
+  Dhuhr: "الظهر",
+  Asr: "العصر",
+  Maghrib: "المغرب",
+  Isha: "العشاء",
+  Sunrise: "الشروق"
+};
+
+// رابط صوت الأذان (يمكنك تغييره)
+const ADHAN_URL = "https://www.islamcan.com/audio/adhan/azan1.mp3";
+
+let prayerTimes = {};
+let cityName = "";
+let lastPlayedPrayer = "";
+
+// ============ الساعة ============
+function updateClock() {
+  const now = new Date();
+  document.getElementById('clock').textContent = 
+    now.toLocaleTimeString('ar-EG', {hour12: false});
+  
+  const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
+  document.getElementById('date').textContent = 
+    now.toLocaleDateString('ar-EG', options);
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+// ============ جلب الموقع ومواقيت الصلاة ============
+async function getLocationAndTimes() {
+  try {
+    const pos = await new Promise((res, rej) => 
+      navigator.geolocation.getCurrentPosition(res, rej, {timeout: 10000})
+    );
+    const lat = pos.coords.latitude;
+    const lon = pos.coords.longitude;
+    
+    // اسم المدينة عبر API عكسي
+    try {
+      const geo = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=ar`);
+      const geoData = await geo.json();
+      cityName = geoData.city || geoData.locality || "موقعك";
+      document.getElementById('city').textContent = `📍 ${cityName}`;
+    } catch { 
+      document.getElementById('city').textContent = `📍 (${lat.toFixed(2)}, ${lon.toFixed(2)})`;
+    }
+    
+    await fetchPrayerTimes(lat, lon);
+  } catch (err) {
+    // افتراضي: مكة المكرمة
+    document.getElementById('city').textContent = "📍 مكة المكرمة (افتراضي)";
+    await fetchPrayerTimes(21.4225, 39.8262);
+  }
+}
+
+async function fetchPrayerTimes(lat, lon) {
+  const today = new Date();
+  const dd = String(today.getDate()).padStart(2,'0');
+  const mm = String(today.getMonth()+1).padStart(2,'0');
+  const yyyy = today.getFullYear();
+  
+  const url = `https://api.aladhan.com/v1/timings/${dd}-${mm}-${yyyy}?latitude=${lat}&longitude=${lon}&method=4`;
+  
+  try {
+    const res = await fetch(url);
+    const data = await res.json();
+    prayerTimes = data.data.timings;
+    renderPrayers();
+    updateNextPrayer();
+  } catch (err) {
+    document.getElementById('prayers').innerHTML = 
+      '<div class="status">❌ خطأ في جلب المواقيت. تحقق من الإنترنت.</div>';
+  }
+}
+
+// ============ عرض المواقيت ============
+function renderPrayers() {
+  const container = document.getElementById('prayers');
+  container.innerHTML = "";
+  const keys = ["Fajr", "Sunrise", "Dhuhr", "Asr", "Maghrib", "Isha"];
+  
+  keys.forEach(k => {
+    const div = document.createElement('div');
+    div.className = 'prayer';
+    div.dataset.key = k;
+    const time = prayerTimes[k] ? prayerTimes[k].split(' ')[0] : '--:--';
+    div.innerHTML = `
+      <span class="prayer-name">${k === 'Sunrise' ? '🌅' : '🕌'} ${PRAYER_NAMES[k]}</span>
+      <span class="prayer-time">${time}</span>
+    `;
+    container.appendChild(div);
+  });
+}
+
+// ============ الصلاة القادمة ============
+function getNextPrayer() {
+  const now = new Date();
+  const nowMin = now.getHours() * 60 + now.getMinutes();
+  const keys = ["Fajr", "Dhuhr", "Asr", "Maghrib", "Isha"];
+  let next = null;
+  let minDiff = Infinity;
+  
+  for (const k of keys) {
+    if (!prayerTimes[k]) continue;
+    const [h, m] = prayerTimes[k].split(' ')[0].split(':').map(Number);
+    const pMin = h * 60 + m;
+    let diff = pMin - nowMin;
+    if (diff < 0) diff += 24 * 60;
+    if (diff < minDiff) { minDiff = diff; next = k; }
+  }
+  return { key: next, minutes: minDiff };
+}
+
+function updateNextPrayer() {
+  const { key, minutes } = getNextPrayer();
+  if (!key) return;
+  
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  const timeStr = prayerTimes[key].split(' ')[0];
+  
+  document.getElementById('nextInfo').innerHTML = 
+    `الصلاة القادمة: <strong style="color:#ffd700">${PRAYER_NAMES[key]}</strong> 
+     في ${timeStr}<br>
+     <span style="color:#00d4ff">متبقي: ${hours} س ${mins} د</span>`;
+  
+  // تمييز الصلاة القادمة
+  document.querySelectorAll('.prayer').forEach(el => {
+    el.classList.toggle('next', el.dataset.key === key);
+  });
+  
+  // تشغيل تلقائي عند دخول وقت الصلاة
+  const now = new Date();
+  const [h, m] = timeStr.split(':').map(Number);
+  if (now.getHours() === h && now.getMinutes() === m && lastPlayedPrayer !== key) {
+    lastPlayedPrayer = key;
+    playAdhan();
+    showNotification(`حان الآن وقت أذان ${PRAYER_NAMES[key]}`);
+  }
+}
+
+setInterval(updateNextPrayer, 30000);
+
+// ============ الصوت ============
+const audio = document.getElementById('adhanAudio');
+
+function playAdhan() {
+  audio.src = ADHAN_URL;
+  audio.play()
+    .then(() => document.getElementById('status').textContent = "🎵 الأذان يعمل...")
+    .catch(e => document.getElementById('status').textContent = "⚠️ تعذر التشغيل: " + e.message);
+}
+
+function stopAdhan() {
+  audio.pause();
+  audio.currentTime = 0;
+  document.getElementById('status').textContent = "⏹️ تم إيقاف الأذان";
+}
+
+// ============ الإشعارات ============
+async function enableNotifications() {
+  if (!("Notification" in window)) {
+    document.getElementById('status').textContent = "❌ المتصفح لا يدعم الإشعارات";
+    return;
+  }
+  const perm = await Notification.requestPermission();
+  document.getElementById('status').textContent = 
+    perm === 'granted' ? "✅ تم تفعيل الإشعارات" : "❌ رُفضت الإشعارات";
+}
+
+function showNotification(msg) {
+  if (Notification.permission === 'granted') {
+    new Notification("🕌 تطبيق الأذان", { body: msg });
+  }
+}
+
+// ============ بدء ============
+getLocationAndTimes();
+setInterval(getLocationAndTimes, 6 * 60 * 60 * 1000); // كل 6 ساعات
+</script>
+
+</body>
+</html>
